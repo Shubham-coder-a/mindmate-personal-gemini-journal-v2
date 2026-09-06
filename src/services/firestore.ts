@@ -7,12 +7,58 @@ import {
   query,
   orderBy,
   onSnapshot,
-  getDocs,
   limit,
   serverTimestamp
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
 import { JournalEntry, Conversation, ReflectionSummary } from '../types';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map((provider) => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 // ==========================================
 // 1. Journal Entries Service (Isolated by UID)
@@ -29,6 +75,7 @@ export function subscribeJournalEntries(
     return () => {};
   }
 
+  const path = `users/${userId}/journalEntries`;
   const entriesRef = collection(db, 'users', userId, 'journalEntries');
   const q = query(entriesRef, orderBy('createdAt', 'desc'));
 
@@ -53,8 +100,11 @@ export function subscribeJournalEntries(
       onUpdate(entries);
     },
     (err) => {
-      console.error('Error fetching journal entries from Firestore:', err);
-      if (onError) onError(err);
+      try {
+        handleFirestoreError(err, OperationType.LIST, path);
+      } catch (structuredError: any) {
+        if (onError) onError(structuredError);
+      }
     }
   );
 }
@@ -65,6 +115,7 @@ export async function createJournalEntry(
 ): Promise<string> {
   if (!userId) throw new Error('Authentication required to create journal entry');
 
+  const path = `users/${userId}/journalEntries`;
   const entriesRef = collection(db, 'users', userId, 'journalEntries');
   const newDocRef = doc(entriesRef);
   const now = new Date().toISOString();
@@ -80,8 +131,12 @@ export async function createJournalEntry(
     serverCreated: serverTimestamp(),
   };
 
-  await setDoc(newDocRef, payload);
-  return newDocRef.id;
+  try {
+    await setDoc(newDocRef, payload);
+    return newDocRef.id;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
 }
 
 export async function updateJournalEntry(
@@ -91,17 +146,27 @@ export async function updateJournalEntry(
 ): Promise<void> {
   if (!userId || !entryId) throw new Error('User ID and Entry ID are required');
 
+  const path = `users/${userId}/journalEntries/${entryId}`;
   const docRef = doc(db, 'users', userId, 'journalEntries', entryId);
-  await updateDoc(docRef, {
-    ...updates,
-    updatedAt: new Date().toISOString(),
-  });
+  try {
+    await updateDoc(docRef, {
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
 }
 
 export async function deleteJournalEntry(userId: string, entryId: string): Promise<void> {
   if (!userId || !entryId) throw new Error('User ID and Entry ID are required');
+  const path = `users/${userId}/journalEntries/${entryId}`;
   const docRef = doc(db, 'users', userId, 'journalEntries', entryId);
-  await deleteDoc(docRef);
+  try {
+    await deleteDoc(docRef);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
 }
 
 // ==========================================
@@ -119,6 +184,7 @@ export function subscribeConversations(
     return () => {};
   }
 
+  const path = `users/${userId}/conversations`;
   const convosRef = collection(db, 'users', userId, 'conversations');
   const q = query(convosRef, orderBy('updatedAt', 'desc'));
 
@@ -141,8 +207,11 @@ export function subscribeConversations(
       onUpdate(convos);
     },
     (err) => {
-      console.error('Error fetching conversations from Firestore:', err);
-      if (onError) onError(err);
+      try {
+        handleFirestoreError(err, OperationType.LIST, path);
+      } catch (structuredError: any) {
+        if (onError) onError(structuredError);
+      }
     }
   );
 }
@@ -160,6 +229,7 @@ export async function saveConversation(
 
   const convosRef = collection(db, 'users', userId, 'conversations');
   const convoDocRef = convo.id ? doc(convosRef, convo.id) : doc(convosRef);
+  const path = `users/${userId}/conversations/${convoDocRef.id}`;
   const now = new Date().toISOString();
 
   const payload = {
@@ -170,14 +240,23 @@ export async function saveConversation(
     ...(convo.relatedEntryId ? { relatedEntryId: convo.relatedEntryId } : {}),
   };
 
-  await setDoc(convoDocRef, payload, { merge: true });
-  return convoDocRef.id;
+  try {
+    await setDoc(convoDocRef, payload, { merge: true });
+    return convoDocRef.id;
+  } catch (err) {
+    handleFirestoreError(err, convo.id ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
 }
 
 export async function deleteConversation(userId: string, convoId: string): Promise<void> {
   if (!userId || !convoId) throw new Error('User ID and Conversation ID required');
+  const path = `users/${userId}/conversations/${convoId}`;
   const docRef = doc(db, 'users', userId, 'conversations', convoId);
-  await deleteDoc(docRef);
+  try {
+    await deleteDoc(docRef);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
 }
 
 // ==========================================
@@ -195,6 +274,7 @@ export function subscribeReflections(
     return () => {};
   }
 
+  const path = `users/${userId}/reflections`;
   const reflRef = collection(db, 'users', userId, 'reflections');
   const q = query(reflRef, orderBy('createdAt', 'desc'), limit(20));
 
@@ -222,8 +302,11 @@ export function subscribeReflections(
       onUpdate(reflections);
     },
     (err) => {
-      console.error('Error fetching reflections from Firestore:', err);
-      if (onError) onError(err);
+      try {
+        handleFirestoreError(err, OperationType.LIST, path);
+      } catch (structuredError: any) {
+        if (onError) onError(structuredError);
+      }
     }
   );
 }
@@ -234,6 +317,7 @@ export async function saveReflectionSummary(
 ): Promise<string> {
   if (!userId) throw new Error('Authentication required to save reflection');
 
+  const path = `users/${userId}/reflections`;
   const reflRef = collection(db, 'users', userId, 'reflections');
   const newDocRef = doc(reflRef);
   const now = new Date().toISOString();
@@ -251,12 +335,22 @@ export async function saveReflectionSummary(
     createdAt: now,
   };
 
-  await setDoc(newDocRef, payload);
-  return newDocRef.id;
+  try {
+    await setDoc(newDocRef, payload);
+    return newDocRef.id;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
 }
 
 export async function deleteReflectionSummary(userId: string, reflectionId: string): Promise<void> {
   if (!userId || !reflectionId) throw new Error('User ID and Reflection ID required');
+  const path = `users/${userId}/reflections/${reflectionId}`;
   const docRef = doc(db, 'users', userId, 'reflections', reflectionId);
-  await deleteDoc(docRef);
+  try {
+    await deleteDoc(docRef);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
 }
+
