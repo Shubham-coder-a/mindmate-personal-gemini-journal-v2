@@ -1,0 +1,61 @@
+{
+  "entities": {
+    "JournalEntry": {
+      "title": "JournalEntry",
+      "description": "User's private journal entry containing reflections, thoughts, mood, and tags",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "mood": { "type": "string" },
+        "tags": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "content", "createdAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Private multi-turn conversation between the user and Gemini about reflections and journal entries",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "messages": { "type": "array" }
+      },
+      "required": ["title", "updatedAt"]
+    },
+    "ReflectionSummary": {
+      "title": "ReflectionSummary",
+      "description": "AI-generated mood analysis and reflection summary synthesized from recent journal entries",
+      "type": "object",
+      "properties": {
+        "detectedMood": { "type": "string" },
+        "moodScore": { "type": "number" },
+        "keyThemes": { "type": "array" },
+        "positiveHighlights": { "type": "array" },
+        "areasOfConcern": { "type": "array" },
+        "shortReflection": { "type": "string" },
+        "mindfulPrompt": { "type": "string" },
+        "entryCountAnalyzed": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["detectedMood", "shortReflection", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/journalEntries/{entryId}": {
+      "schema": "JournalEntry",
+      "description": "User isolated private journal entries"
+    },
+    "/users/{userId}/conversations/{convoId}": {
+      "schema": "Conversation",
+      "description": "User isolated multi-turn Gemini conversations"
+    },
+    "/users/{userId}/reflections/{reflectionId}": {
+      "schema": "ReflectionSummary",
+      "description": "User isolated mood and reflection summaries"
+    }
+  }
+}
